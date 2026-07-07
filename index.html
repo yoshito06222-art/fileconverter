@@ -1,0 +1,739 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>MP4 リネーム & WAV 変換</title>
+<style>
+  :root{
+    --bg: #f7f7f8;
+    --card: #ffffff;
+    --border: #e3e3e6;
+    --text: #1a1a1e;
+    --sub: #7a7a80;
+    --accent: #2563eb;
+    --accent-soft: #eaf0fe;
+    --green: #1a9c4b;
+    --red: #d93025;
+    --radius: 10px;
+  }
+  *{ box-sizing: border-box; }
+  html, body{ margin:0; padding:0; width:100%; overflow-x:hidden; }
+  body{
+    font-family: -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Hiragino Kaku Gothic ProN", "Yu Gothic", "Segoe UI", Roboto, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+  }
+  .app{
+    max-width: 720px;
+    margin: 0 auto;
+    padding: 32px 20px 100px;
+    width: 100%;
+  }
+  header{ margin-bottom: 24px; }
+  header h1{ font-size: 22px; font-weight: 700; margin: 0 0 6px; }
+  header p{ margin: 0; color: var(--sub); font-size: 14px; line-height: 1.6; }
+
+  .card{
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 18px;
+    margin-bottom: 14px;
+    max-width: 100%;
+  }
+  .card h2{
+    font-size: 14px;
+    font-weight: 600;
+    margin: 0 0 14px;
+    display:flex; align-items:center; gap:8px;
+  }
+  .card h2 .badge{
+    display:inline-flex; align-items:center; justify-content:center;
+    width:18px; height:18px; border-radius:50%;
+    background: var(--accent); color:#fff; font-size:10.5px; font-weight:700;
+    flex-shrink:0;
+  }
+
+  /* file select */
+  #drop-zone{
+    border: 1.5px dashed var(--border);
+    border-radius: var(--radius);
+    padding: 26px 16px;
+    text-align: center;
+    cursor: pointer;
+    transition: background .15s ease, border-color .15s ease;
+  }
+  #drop-zone.dragover{ border-color: var(--accent); background: var(--accent-soft); }
+  #drop-zone strong{ font-size: 14px; display:block; }
+  #drop-zone span{ display:block; margin-top:4px; font-size:12.5px; color:var(--sub); }
+  #file-input{ display:none; }
+
+  #file-list{ margin-top: 4px; }
+  .file-row{
+    display:flex; align-items:center; gap:10px;
+    padding: 8px 2px;
+    border-bottom: 1px solid var(--border);
+    font-size: 13.5px;
+    min-width:0;
+  }
+  .file-row:last-child{ border-bottom:none; }
+  .file-row .idx{
+    width:20px; height:20px; border-radius:50%;
+    background: #f0f0f2; color: var(--sub);
+    display:flex; align-items:center; justify-content:center;
+    font-size:11px; font-weight:600; flex-shrink:0;
+  }
+  .file-row .name{ flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .file-row .size{ color: var(--sub); font-size:12px; flex-shrink:0; }
+  .file-row .rm{
+    flex-shrink:0; width:20px; height:20px; border:none; border-radius:50%;
+    background: #fdeceb; color: var(--red);
+    cursor:pointer; font-size:12px; line-height:1;
+  }
+
+  .add-more{
+    display: inline-block;
+    margin-top: 10px;
+    background: none;
+    border: none;
+    color: var(--sub);
+    font-size: 12.5px;
+    cursor: pointer;
+    padding: 4px 2px;
+  }
+  .add-more:hover{ color: var(--accent); }
+
+  /* naming */
+  .segmented{
+    display:flex;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    overflow: hidden;
+    margin-bottom: 14px;
+  }
+  .segmented label{
+    flex: 1 1 0;
+    min-width: 0;
+    text-align:center;
+    font-size: 12px;
+    font-weight: 500;
+    padding: 8px 4px;
+    cursor: pointer;
+    color: var(--sub);
+    background: #fff;
+    border-left: 1px solid var(--border);
+    transition: background .12s ease, color .12s ease;
+    user-select:none;
+    overflow-wrap: break-word;
+  }
+  .segmented label:first-of-type{ border-left:none; }
+  .segmented input{ display:none; }
+  .segmented input:checked + label{
+    background: var(--accent);
+    color: #fff;
+  }
+
+  .field{ margin-bottom: 10px; min-width:0; }
+  .field label.field-label{
+    display:block; font-size:11.5px; color:var(--sub); margin-bottom:5px; font-weight:500;
+  }
+  .field input[type=text], .field input[type=number]{
+    width:100%;
+    max-width:100%;
+    padding: 8px 10px;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+    background: #fff;
+    font-size: 13.5px;
+    color: var(--text);
+    outline:none;
+  }
+  .field input:focus{ border-color: var(--accent); }
+  .row2{ display:flex; gap:10px; }
+  .row2 .field{ flex:1; min-width:0; }
+
+  .individual-row{
+    display:flex; align-items:center; gap:8px; margin-bottom:8px; min-width:0;
+  }
+  .individual-row .orig{
+    width: 40%; font-size:11.5px; color:var(--sub); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; flex-shrink:0;
+  }
+  .individual-row input{ flex:1; min-width:0; }
+
+  .preview{
+    font-size: 12px; color: var(--sub); margin-top: 4px;
+    background: var(--accent-soft);
+    border-radius: 6px; padding: 6px 9px;
+    overflow-wrap: break-word;
+  }
+  .preview b{ color: var(--text); font-weight:600; }
+
+  .naming-grid{
+    display:grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 14px;
+  }
+  @media (max-width:600px){
+    .naming-grid{ grid-template-columns: 1fr; }
+  }
+  .naming-grid .subcard{
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 14px;
+    background: #fbfbfc;
+    min-width: 0;
+  }
+  .subcard h3{
+    font-size: 12.5px; margin: 0 0 10px; font-weight:700;
+    display:flex; align-items:center; gap:6px;
+  }
+  .subcard h3 .dot{ width:7px; height:7px; border-radius:50%; flex-shrink:0; }
+  .subcard.mp4 h3 .dot{ background: var(--accent); }
+  .subcard.wav h3 .dot{ background: #7c3aed; }
+
+  button.primary{
+    width:100%;
+    padding: 13px;
+    border:none;
+    border-radius: 10px;
+    background: var(--accent);
+    color:#fff;
+    font-size: 15px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  button.primary:hover{ background: #1d4fd1; }
+  button.primary:disabled{ opacity: .45; cursor:not-allowed; }
+
+  .status-line{
+    display:flex; align-items:center; gap:10px;
+    font-size: 13px; color: var(--sub);
+    padding: 8px 2px;
+  }
+  .status-line .spinner{
+    width:13px; height:13px; border-radius:50%;
+    border: 2px solid var(--accent-soft);
+    border-top-color: var(--accent);
+    animation: spin 0.8s linear infinite;
+    flex-shrink:0;
+  }
+  @keyframes spin{ to{ transform: rotate(360deg); } }
+
+  .prog-row{
+    display:flex; align-items:center; gap:10px; padding: 6px 2px; font-size:13px; min-width:0;
+  }
+  .prog-row .pname{ flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .prog-row .pbar{
+    width:70px; height:5px; border-radius:3px; background: #ececee; overflow:hidden; flex-shrink:0;
+  }
+  .prog-row .pbar > div{ height:100%; width:0%; background: var(--accent); transition: width .2s ease; }
+  .prog-row .pstate{ width:48px; text-align:right; color:var(--sub); font-size:11.5px; flex-shrink:0; }
+  .prog-row.done .pstate{ color: var(--green); font-weight:600; }
+
+  .error-box{
+    font-size: 12.5px; color: var(--red); margin-top:8px; line-height:1.6;
+    background: #fdeceb; border-radius:8px; padding:10px 12px;
+  }
+
+  .result-group{ margin-bottom: 14px; }
+  .result-group h4{ font-size:11.5px; color:var(--sub); margin:0 0 8px; font-weight:600; text-transform:uppercase; letter-spacing:.03em; }
+  .result-row{
+    display:flex; align-items:center; gap:10px; padding:8px 2px; border-bottom:1px solid var(--border); font-size:13.5px; min-width:0;
+  }
+  .result-row:last-child{ border-bottom:none; }
+  .result-row .name{ flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .result-row a.dl{
+    flex-shrink:0; text-decoration:none; font-size:12px; font-weight:600;
+    color: var(--accent); background: var(--accent-soft);
+    padding: 5px 11px; border-radius: 6px;
+  }
+  button.zip{
+    width:100%; padding:12px; border-radius:10px;
+    background: #fff; border:1px solid var(--border);
+    color: var(--text); font-weight:600; font-size:14px; cursor:pointer;
+    margin-top: 4px;
+  }
+  button.zip:hover{ background: #f2f2f4; }
+  .hidden{ display:none !important; }
+  .hint{ font-size:12px; color: var(--sub); margin-top:8px; line-height:1.5; }
+</style>
+</head>
+<body>
+<div class="app">
+  <header>
+    <h1>MP4 リネーム & WAV 変換</h1>
+    <p>MP4ファイルを選び、名前のルールを決めるだけで、リネーム済みのMP4と、音声を抽出したWAVをまとめて書き出します。</p>
+  </header>
+
+  <div class="card" id="file-card">
+    <h2><span class="badge">1</span>ファイルを選択</h2>
+    <div id="drop-zone">
+      <strong>クリックしてMP4を選択</strong>
+      <span>ドラッグ&ドロップにも対応。複数ファイルも一度に選べます</span>
+    </div>
+    <input type="file" id="file-input" accept="video/mp4,.mp4" multiple>
+    <div id="file-list"></div>
+    <button class="add-more hidden" id="add-more-btn">+ ファイルを追加</button>
+  </div>
+
+  <div class="card hidden" id="naming-card">
+    <h2><span class="badge">2</span>ファイル名を決める</h2>
+    <div class="naming-grid">
+      <div class="subcard mp4">
+        <h3><span class="dot"></span>MP4（リネーム後）</h3>
+        <div id="mp4-config"></div>
+      </div>
+      <div class="subcard wav">
+        <h3><span class="dot"></span>WAV（変換後）</h3>
+        <div id="wav-config"></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card hidden" id="process-card">
+    <h2><span class="badge">3</span>実行</h2>
+    <button class="primary" id="process-btn">変換を開始</button>
+    <div class="error-box hidden" id="config-error"></div>
+    <div id="progress-area" style="margin-top:10px;"></div>
+  </div>
+
+  <div class="card hidden" id="results-card">
+    <h2><span class="badge">✓</span>完了</h2>
+    <div class="result-group">
+      <h4>MP4</h4>
+      <div id="result-mp4"></div>
+    </div>
+    <div class="result-group">
+      <h4>WAV</h4>
+      <div id="result-wav"></div>
+    </div>
+    <button class="zip" id="zip-btn">ZIPでまとめてダウンロード</button>
+    <div class="hint">個別に保存する場合は、それぞれの「ダウンロード」を押してください。</div>
+  </div>
+</div>
+
+<script type="module">
+import { FFmpeg } from "https://unpkg.com/@ffmpeg/ffmpeg@0.12.10/dist/esm/index.js";
+import { fetchFile, toBlobURL } from "https://unpkg.com/@ffmpeg/util@0.12.1/dist/esm/index.js";
+
+/* ---------- state ---------- */
+let files = [];
+const config = {
+  mp4: { mode: "keep", individualNames: [], base: "", start: 1, digits: 2 },
+  wav: { mode: "keep", individualNames: [], base: "", start: 1, digits: 2 },
+};
+let ffmpeg = null;
+let ffmpegLoaded = false;
+let results = { mp4: [], wav: [] };
+
+/* ---------- helpers ---------- */
+function stripExt(name){
+  const i = name.lastIndexOf(".");
+  return i > 0 ? name.slice(0, i) : name;
+}
+function sanitize(name){
+  return name.replace(/[\\/:*?"<>|]/g, "_").trim() || "untitled";
+}
+function pad(n, digits){ return String(n).padStart(digits, "0"); }
+function formatSize(bytes){
+  if (bytes < 1024) return bytes + " B";
+  if (bytes < 1024*1024) return (bytes/1024).toFixed(1) + " KB";
+  return (bytes/1024/1024).toFixed(1) + " MB";
+}
+
+/* ---------- file selection ---------- */
+const dropZone = document.getElementById("drop-zone");
+const fileInput = document.getElementById("file-input");
+const fileListEl = document.getElementById("file-list");
+const addMoreBtn = document.getElementById("add-more-btn");
+const namingCard = document.getElementById("naming-card");
+const processCard = document.getElementById("process-card");
+
+dropZone.addEventListener("click", () => fileInput.click());
+addMoreBtn.addEventListener("click", () => fileInput.click());
+
+["dragover","dragenter"].forEach(evt=>{
+  dropZone.addEventListener(evt, (e)=>{ e.preventDefault(); dropZone.classList.add("dragover"); });
+});
+["dragleave","drop"].forEach(evt=>{
+  dropZone.addEventListener(evt, (e)=>{ e.preventDefault(); dropZone.classList.remove("dragover"); });
+});
+dropZone.addEventListener("drop", (e)=>{
+  const dropped = Array.from(e.dataTransfer.files).filter(f => f.name.toLowerCase().endsWith(".mp4"));
+  if (dropped.length) setFiles(dropped);
+});
+
+fileInput.addEventListener("change", () => {
+  const picked = Array.from(fileInput.files);
+  if (!picked.length) return;
+  if (files.length === 0){
+    setFiles(picked);
+  } else {
+    addFiles(picked);
+  }
+  fileInput.value = "";
+});
+
+function setFiles(list){
+  files = list;
+  config.mp4.individualNames = files.map(f => stripExt(f.name));
+  config.wav.individualNames = files.map(f => stripExt(f.name));
+  afterFilesChanged();
+}
+
+function addFiles(list){
+  files = files.concat(list);
+  list.forEach(f => {
+    config.mp4.individualNames.push(stripExt(f.name));
+    config.wav.individualNames.push(stripExt(f.name));
+  });
+  afterFilesChanged();
+}
+
+function afterFilesChanged(){
+  renderFileList();
+  renderNamingConfig("mp4");
+  renderNamingConfig("wav");
+  const hasFiles = files.length > 0;
+  dropZone.classList.toggle("hidden", hasFiles);
+  addMoreBtn.classList.toggle("hidden", !hasFiles);
+  namingCard.classList.toggle("hidden", !hasFiles);
+  processCard.classList.toggle("hidden", !hasFiles);
+  document.getElementById("results-card").classList.add("hidden");
+}
+
+function renderFileList(){
+  fileListEl.innerHTML = "";
+  files.forEach((f, i) => {
+    const row = document.createElement("div");
+    row.className = "file-row";
+    row.innerHTML = `
+      <div class="idx">${i+1}</div>
+      <div class="name">${f.name}</div>
+      <div class="size">${formatSize(f.size)}</div>
+      <button class="rm" data-i="${i}" title="削除">×</button>
+    `;
+    fileListEl.appendChild(row);
+  });
+  fileListEl.querySelectorAll(".rm").forEach(btn=>{
+    btn.addEventListener("click", () => {
+      const i = Number(btn.dataset.i);
+      files.splice(i, 1);
+      config.mp4.individualNames.splice(i, 1);
+      config.wav.individualNames.splice(i, 1);
+      afterFilesChanged();
+    });
+  });
+}
+
+/* ---------- naming config UI ---------- */
+function renderNamingConfig(type){
+  const el = document.getElementById(`${type}-config`);
+  const cfg = config[type];
+  const ext = type === "mp4" ? ".mp4" : ".wav";
+
+  el.innerHTML = `
+    <div class="segmented" data-type="${type}">
+      <input type="radio" name="${type}-mode" id="${type}-keep" value="keep" ${cfg.mode==="keep"?"checked":""}>
+      <label for="${type}-keep">元の名前のまま</label>
+      <input type="radio" name="${type}-mode" id="${type}-individual" value="individual" ${cfg.mode==="individual"?"checked":""}>
+      <label for="${type}-individual">個別に入力</label>
+      <input type="radio" name="${type}-mode" id="${type}-unified" value="unified" ${cfg.mode==="unified"?"checked":""}>
+      <label for="${type}-unified">連番でリネーム</label>
+    </div>
+    <div class="mode-body"></div>
+  `;
+
+  el.querySelectorAll(`input[name="${type}-mode"]`).forEach(radio=>{
+    radio.addEventListener("change", () => {
+      cfg.mode = radio.value;
+      renderModeBody(type);
+    });
+  });
+
+  renderModeBody(type);
+
+  function renderModeBody(type){
+    const body = el.querySelector(".mode-body");
+    const cfg = config[type];
+    if (cfg.mode === "keep"){
+      body.innerHTML = `<div class="preview">例: <b>${files[0] ? sanitize(stripExt(files[0].name)) + ext : "—"}</b>（元のファイル名の拡張子だけ変わります）</div>`;
+    } else if (cfg.mode === "individual"){
+      body.innerHTML = "";
+      files.forEach((f, i) => {
+        const row = document.createElement("div");
+        row.className = "individual-row";
+        row.innerHTML = `
+          <div class="orig" title="${f.name}">${f.name}</div>
+          <input type="text" data-i="${i}" value="${cfg.individualNames[i] ?? stripExt(f.name)}" placeholder="新しいファイル名">
+        `;
+        body.appendChild(row);
+      });
+      body.querySelectorAll("input").forEach(inp=>{
+        inp.addEventListener("input", () => {
+          cfg.individualNames[Number(inp.dataset.i)] = inp.value;
+        });
+      });
+    } else if (cfg.mode === "unified"){
+      body.innerHTML = `
+        <div class="field">
+          <label class="field-label">ベースネーム</label>
+          <input type="text" id="${type}-base" value="${cfg.base}" placeholder="例: lecture">
+        </div>
+        <div class="row2">
+          <div class="field">
+            <label class="field-label">開始番号</label>
+            <input type="number" id="${type}-start" value="${cfg.start}" min="0">
+          </div>
+          <div class="field">
+            <label class="field-label">番号の桁数</label>
+            <input type="number" id="${type}-digits" value="${cfg.digits}" min="1" max="6">
+          </div>
+        </div>
+        <div class="preview" id="${type}-preview"></div>
+      `;
+      const baseInp = body.querySelector(`#${type}-base`);
+      const startInp = body.querySelector(`#${type}-start`);
+      const digitsInp = body.querySelector(`#${type}-digits`);
+      const update = () => {
+        cfg.base = baseInp.value;
+        cfg.start = Number(startInp.value) || 0;
+        cfg.digits = Math.min(6, Math.max(1, Number(digitsInp.value) || 1));
+        updatePreview(type);
+      };
+      [baseInp, startInp, digitsInp].forEach(i => i.addEventListener("input", update));
+      updatePreview(type);
+    }
+  }
+
+  function updatePreview(type){
+    const cfg = config[type];
+    const previewEl = el.querySelector(`#${type}-preview`);
+    if (!previewEl) return;
+    const base = sanitize(cfg.base || "ファイル名");
+    const first = `${base}_${pad(cfg.start, cfg.digits)}${ext}`;
+    const lastNum = cfg.start + Math.max(files.length - 1, 0);
+    const last = `${base}_${pad(lastNum, cfg.digits)}${ext}`;
+    previewEl.innerHTML = files.length > 1
+      ? `例: <b>${first}</b> 〜 <b>${last}</b>`
+      : `例: <b>${first}</b>`;
+  }
+}
+
+/* ---------- compute output names ---------- */
+function computeNames(type){
+  const cfg = config[type];
+  const ext = type === "mp4" ? ".mp4" : ".wav";
+  if (cfg.mode === "keep") return files.map(f => sanitize(stripExt(f.name)) + ext);
+  if (cfg.mode === "individual") return files.map((f, i) => sanitize(cfg.individualNames[i] || stripExt(f.name)) + ext);
+  const base = sanitize(cfg.base || "file");
+  return files.map((f, i) => `${base}_${pad(cfg.start + i, cfg.digits)}${ext}`);
+}
+
+function validateConfig(){
+  for (const type of ["mp4","wav"]){
+    const cfg = config[type];
+    const label = type === "mp4" ? "MP4" : "WAV";
+    if (cfg.mode === "individual" && cfg.individualNames.some(n => !n || !n.trim())){
+      return `${label}側で、名前が空欄のファイルがあります。すべて入力してください。`;
+    }
+    if (cfg.mode === "unified" && !cfg.base.trim()){
+      return `${label}側で、ベースネームが入力されていません。`;
+    }
+  }
+  return null;
+}
+
+/* ---------- processing ---------- */
+const processBtn = document.getElementById("process-btn");
+const progressArea = document.getElementById("progress-area");
+const configError = document.getElementById("config-error");
+const resultsCard = document.getElementById("results-card");
+
+processBtn.addEventListener("click", async () => {
+  const err = validateConfig();
+  if (err){
+    configError.textContent = err;
+    configError.classList.remove("hidden");
+    return;
+  }
+  configError.classList.add("hidden");
+  processBtn.disabled = true;
+  progressArea.innerHTML = "";
+  resultsCard.classList.add("hidden");
+  results = { mp4: [], wav: [] };
+
+  const statusLine = document.createElement("div");
+  statusLine.className = "status-line";
+  const statusText = document.createElement("span");
+  statusText.textContent = "変換エンジンを読み込み中…（初回のみ数十MBのダウンロードが発生します）";
+  const spinner = document.createElement("div");
+  spinner.className = "spinner";
+  statusLine.appendChild(spinner);
+  statusLine.appendChild(statusText);
+  progressArea.appendChild(statusLine);
+
+  try {
+    await ensureFfmpeg((msg) => { statusText.textContent = msg; });
+  } catch (e){
+    console.error("ffmpeg load failed:", e);
+    statusLine.querySelector(".spinner")?.remove();
+    statusText.innerHTML =
+      "変換エンジンの読み込みに失敗、または時間がかかりすぎています。<br>" +
+      "このファイルを <b>file://</b> で直接開いていませんか？その場合、ブラウザがWeb Workerの起動をブロックし、変換が進まないことがあります。<br>" +
+      "GitHub Pagesなど <b>https://</b> 経由で開くか、ローカルサーバー（例: <code>npx serve</code>）を使って開いてみてください。";
+    statusText.style.color = "var(--red)";
+    processBtn.disabled = false;
+    return;
+  }
+  statusLine.remove();
+
+  const mp4Names = computeNames("mp4");
+  const wavNames = computeNames("wav");
+
+  const rows = files.map((f, i) => {
+    const row = document.createElement("div");
+    row.className = "prog-row";
+    row.innerHTML = `
+      <div class="pname">${wavNames[i]}</div>
+      <div class="pbar"><div></div></div>
+      <div class="pstate">待機中</div>
+    `;
+    progressArea.appendChild(row);
+    return row;
+  });
+
+  for (let i = 0; i < files.length; i++){
+    const file = files[i];
+    const row = rows[i];
+    const bar = row.querySelector(".pbar > div");
+    const state = row.querySelector(".pstate");
+    state.textContent = "変換中";
+
+    const onProgress = ({ progress }) => {
+      const pct = Math.min(100, Math.max(0, Math.round(progress * 100)));
+      bar.style.width = pct + "%";
+    };
+    ffmpeg.on("progress", onProgress);
+
+    const inputName = `in_${i}.mp4`;
+    const outputName = `out_${i}.wav`;
+    try {
+      await ffmpeg.writeFile(inputName, await fetchFile(file));
+      await ffmpeg.exec(["-i", inputName, "-vn", "-acodec", "pcm_s16le", outputName]);
+      const data = await ffmpeg.readFile(outputName);
+      const wavBlob = new Blob([data.buffer], { type: "audio/wav" });
+      results.wav.push({ name: wavNames[i], blob: wavBlob });
+      results.mp4.push({ name: mp4Names[i], blob: file });
+      await ffmpeg.deleteFile(inputName);
+      await ffmpeg.deleteFile(outputName);
+    } catch (e){
+      console.error(`変換失敗 (${file.name}):`, e);
+      state.textContent = "失敗";
+      state.style.color = "var(--red)";
+      ffmpeg.off("progress", onProgress);
+      continue;
+    }
+    ffmpeg.off("progress", onProgress);
+    bar.style.width = "100%";
+    state.textContent = "完了";
+    row.classList.add("done");
+  }
+
+  processBtn.disabled = false;
+  renderResults();
+});
+
+async function ensureFfmpeg(onStatus){
+  if (ffmpegLoaded) return;
+  ffmpeg = new FFmpeg();
+  ffmpeg.on("log", ({ message }) => console.log("[ffmpeg]", message));
+
+  const baseURL = "https://unpkg.com/@ffmpeg/core@0.12.6/dist/esm";
+
+  const loadPromise = (async () => {
+    onStatus("エンジンのコアファイルをダウンロード中…");
+    const coreURL = await toBlobURL(`${baseURL}/ffmpeg-core.js`, "text/javascript");
+    const wasmURL = await toBlobURL(`${baseURL}/ffmpeg-core.wasm`, "application/wasm");
+    onStatus("エンジンを初期化中…");
+    await ffmpeg.load({ coreURL, wasmURL });
+  })();
+
+  const timeoutPromise = new Promise((_, reject) => {
+    setTimeout(() => reject(new Error("ffmpeg load timeout")), 45000);
+  });
+
+  await Promise.race([loadPromise, timeoutPromise]);
+  ffmpegLoaded = true;
+}
+
+/* ---------- results / download ---------- */
+function renderResults(){
+  const mp4El = document.getElementById("result-mp4");
+  const wavEl = document.getElementById("result-wav");
+  mp4El.innerHTML = "";
+  wavEl.innerHTML = "";
+
+  results.mp4.forEach(r => mp4El.appendChild(makeResultRow(r)));
+  results.wav.forEach(r => wavEl.appendChild(makeResultRow(r)));
+
+  resultsCard.classList.remove("hidden");
+  resultsCard.scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+function makeResultRow(r){
+  const row = document.createElement("div");
+  row.className = "result-row";
+  const url = URL.createObjectURL(r.blob);
+  row.innerHTML = `<div class="name">${r.name}</div>`;
+  const a = document.createElement("a");
+  a.className = "dl";
+  a.href = url;
+  a.download = r.name;
+  a.textContent = "ダウンロード";
+  row.appendChild(a);
+  return row;
+}
+
+function ensureJSZip(){
+  if (window.JSZip) return Promise.resolve();
+  return new Promise((resolve, reject) => {
+    const script = document.createElement("script");
+    script.src = "https://unpkg.com/jszip@3.10.1/dist/jszip.min.js";
+    script.onload = () => resolve();
+    script.onerror = () => reject(new Error("JSZip load failed"));
+    document.head.appendChild(script);
+  });
+}
+
+document.getElementById("zip-btn").addEventListener("click", async () => {
+  const zipBtn = document.getElementById("zip-btn");
+  zipBtn.disabled = true;
+  zipBtn.textContent = "ZIPを作成中…";
+  try {
+    await ensureJSZip();
+    const zip = new window.JSZip();
+    const mp4Folder = zip.folder("mp4");
+    const wavFolder = zip.folder("wav");
+    results.mp4.forEach(r => mp4Folder.file(r.name, r.blob));
+    results.wav.forEach(r => wavFolder.file(r.name, r.blob));
+    const blob = await zip.generateAsync({ type: "blob" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "mp4_wav_export.zip";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  } catch (e){
+    console.error("zip failed:", e);
+    alert("ZIPの作成に失敗しました。個別のダウンロードをお試しください。");
+  }
+  zipBtn.disabled = false;
+  zipBtn.textContent = "ZIPでまとめてダウンロード";
+});
+</script>
+</body>
+</html>
