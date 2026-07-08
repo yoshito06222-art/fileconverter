@@ -454,7 +454,7 @@ function audioBufferToWavBlob(audioBuffer){
 
   return new Blob([view], { type: "audio/wav" });
 }
-async function extractWav(file){
+async function extractWav(file, onStatus){
   const arrayBuffer = await file.arrayBuffer();
   const detectedRate = detectAudioSampleRate(arrayBuffer);
   const OfflineCtx = window.OfflineAudioContext || window.webkitOfflineAudioContext;
@@ -471,14 +471,105 @@ async function extractWav(file){
     }
   }
 
-  const AudioContextClass = window.AudioContext || window.webkitAudioContext;
-  const audioCtx = new AudioContextClass();
   try {
-    const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
-    return { blob: audioBufferToWavBlob(audioBuffer), rate: audioBuffer.sampleRate, matchedOriginal: false };
-  } finally {
-    audioCtx.close();
+    const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+    const audioCtx = new AudioContextClass();
+    try {
+      const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
+      return { blob: audioBufferToWavBlob(audioBuffer), rate: audioBuffer.sampleRate, matchedOriginal: false };
+    } finally {
+      audioCtx.close();
+    }
+  } catch (e){
+    console.warn("decodeAudioDataによる変換に失敗、再生キャプチャ方式にフォールバックします:", e);
   }
+
+  // Last resort: some MOV codec/container combinations can't be decoded by decodeAudioData
+  // at all, even though the browser can actually play the file. In that case, play the file
+  // in a hidden <video> element in real time and capture the raw PCM as it plays. This is
+  // slow (as long as the video's duration) and can't preserve the original sample rate, but
+  // it works for almost anything the browser's <video> tag can play.
+  if (typeof onStatus === "function") onStatus("再生しながらキャプチャ中…（時間がかかります）");
+  return await extractWavViaPlayback(file);
+}
+
+function extractWavViaPlayback(file){
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file);
+    const video = document.createElement("video");
+    video.src = url;
+    video.muted = true;
+    video.playsInline = true;
+    video.style.position = "fixed";
+    video.style.left = "-9999px";
+    video.style.width = "1px";
+    video.style.height = "1px";
+    document.body.appendChild(video);
+
+    let audioCtx = null;
+    const cleanup = () => {
+      try { video.pause(); } catch (e){}
+      video.remove();
+      URL.revokeObjectURL(url);
+    };
+
+    video.onerror = () => {
+      cleanup();
+      reject(new Error("この形式はブラウザで再生できないため変換できません"));
+    };
+
+    video.onloadedmetadata = () => {
+      try {
+        const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+        audioCtx = new AudioContextClass();
+        const source = audioCtx.createMediaElementSource(video);
+        const numChannels = 2;
+        const processor = audioCtx.createScriptProcessor(4096, numChannels, numChannels);
+        const chunks = [[], []];
+        processor.onaudioprocess = (e) => {
+          for (let c = 0; c < numChannels; c++){
+            chunks[c].push(new Float32Array(e.inputBuffer.getChannelData(c)));
+          }
+        };
+        const silentGain = audioCtx.createGain();
+        silentGain.gain.value = 0;
+        source.connect(processor);
+        processor.connect(silentGain);
+        silentGain.connect(audioCtx.destination);
+
+        video.onended = async () => {
+          try {
+            processor.disconnect();
+            source.disconnect();
+            silentGain.disconnect();
+            const sampleRate = audioCtx.sampleRate;
+            await audioCtx.close();
+            cleanup();
+            const totalLength = chunks[0].reduce((sum, arr) => sum + arr.length, 0);
+            const merged = [new Float32Array(totalLength), new Float32Array(totalLength)];
+            for (let c = 0; c < numChannels; c++){
+              let offset = 0;
+              for (const arr of chunks[c]){ merged[c].set(arr, offset); offset += arr.length; }
+            }
+            const fakeBuffer = {
+              numberOfChannels: numChannels,
+              sampleRate,
+              length: totalLength,
+              getChannelData: (c) => merged[c],
+            };
+            resolve({ blob: audioBufferToWavBlob(fakeBuffer), rate: sampleRate, matchedOriginal: false });
+          } catch (e){
+            cleanup();
+            reject(e);
+          }
+        };
+        video.play().catch(reject);
+      } catch (e){
+        cleanup();
+        reject(e);
+      }
+    };
+  });
 }
 
 /* ---------- file selection ---------- */
@@ -720,7 +811,9 @@ processBtn.addEventListener("click", async () => {
     state.innerHTML = `<div class="spinner"></div>変換中`;
 
     try {
-      const { blob: wavBlob, rate, matchedOriginal } = await extractWav(file);
+      const { blob: wavBlob, rate, matchedOriginal } = await extractWav(file, (msg) => {
+        state.innerHTML = `<div class="spinner"></div>${msg}`;
+      });
       results.wav.push({ name: wavNames[i], blob: wavBlob });
       results.mp4.push({ name: mp4Names[i], blob: file });
       state.innerHTML = matchedOriginal
@@ -729,7 +822,8 @@ processBtn.addEventListener("click", async () => {
       row.classList.add("done");
     } catch (e){
       console.error(`変換失敗 (${file.name}):`, e);
-      state.textContent = "失敗";
+      const reason = (e && (e.message || e.name)) ? (e.message || e.name) : "不明なエラー";
+      state.innerHTML = `失敗 <span style="color:var(--sub);font-weight:400;" title="${reason.replace(/"/g,'&quot;')}">（${reason}）</span>`;
       row.classList.add("failed");
     }
   }
