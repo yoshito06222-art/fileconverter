@@ -243,11 +243,12 @@
   }
   button.zip{
     width:100%; padding:12px; border-radius:10px;
-    background: #fff; border:1px solid var(--border);
-    color: var(--text); font-weight:600; font-size:14px; cursor:pointer;
+    background: var(--accent); border:none;
+    color: #fff; font-weight:600; font-size:14px; cursor:pointer;
     margin-top: 4px;
   }
-  button.zip:hover{ background: #f2f2f4; }
+  button.zip:hover{ background: #1d4fd1; }
+  button.zip:disabled{ opacity: .45; cursor:not-allowed; }
   .hidden{ display:none !important; }
   .hint{ font-size:12px; color: var(--sub); margin-top:8px; line-height:1.5; }
 </style>
@@ -255,17 +256,17 @@
 <body>
 <div class="app">
   <header>
-    <h1>MP4 リネーム & WAV 変換</h1>
-    <p>MP4ファイルを選び、名前のルールを決めるだけで、リネーム済みのMP4と、音声を抽出したWAVをまとめて書き出します。すべてブラウザ内で処理され、ファイルはどこにもアップロードされません。</p>
+    <h1>動画 リネーム & WAV 変換</h1>
+    <p>MP4 / MOVファイルを選び、名前のルールを決めるだけで、リネーム済みの動画ファイルと、音声を抽出したWAVをまとめて書き出します。すべてブラウザ内で処理され、ファイルはどこにもアップロードされません。</p>
   </header>
 
   <div class="card" id="file-card">
     <h2><span class="badge">1</span>ファイルを選択</h2>
     <div id="drop-zone">
-      <strong>クリックしてMP4を選択</strong>
+      <strong>クリックしてMP4/MOVを選択</strong>
       <span>ドラッグ&ドロップにも対応。複数ファイルも一度に選べます</span>
     </div>
-    <input type="file" id="file-input" accept="video/mp4,.mp4" multiple>
+    <input type="file" id="file-input" accept="video/mp4,.mp4,video/quicktime,.mov" multiple>
     <div id="file-list"></div>
     <button class="add-more hidden" id="add-more-btn">+ ファイルを追加</button>
   </div>
@@ -274,7 +275,7 @@
     <h2><span class="badge">2</span>ファイル名を決める</h2>
     <div class="naming-grid">
       <div class="subcard mp4">
-        <h3><span class="dot"></span>MP4（リネーム後）</h3>
+        <h3><span class="dot"></span>動画（リネーム後）</h3>
         <div id="mp4-config"></div>
       </div>
       <div class="subcard wav">
@@ -294,7 +295,7 @@
   <div class="card hidden" id="results-card">
     <h2><span class="badge">✓</span>完了</h2>
     <div class="result-group">
-      <h4>MP4</h4>
+      <h4>動画</h4>
       <div id="result-mp4"></div>
     </div>
     <div class="result-group">
@@ -324,6 +325,10 @@ function sanitize(name){
   return name.replace(/[\\/:*?"<>|]/g, "_").trim() || "untitled";
 }
 function pad(n, digits){ return String(n).padStart(digits, "0"); }
+function videoExt(file){
+  const i = file.name.lastIndexOf(".");
+  return i > 0 ? file.name.slice(i).toLowerCase() : ".mp4";
+}
 function formatSize(bytes){
   if (bytes < 1024) return bytes + " B";
   if (bytes < 1024*1024) return (bytes/1024).toFixed(1) + " KB";
@@ -411,7 +416,7 @@ addMoreBtn.addEventListener("click", () => fileInput.click());
   dropZone.addEventListener(evt, (e)=>{ e.preventDefault(); dropZone.classList.remove("dragover"); });
 });
 dropZone.addEventListener("drop", (e)=>{
-  const dropped = Array.from(e.dataTransfer.files).filter(f => f.name.toLowerCase().endsWith(".mp4"));
+  const dropped = Array.from(e.dataTransfer.files).filter(f => /\.(mp4|mov)$/i.test(f.name));
   if (dropped.length) setFiles(dropped);
 });
 
@@ -479,7 +484,7 @@ function renderFileList(){
 function renderNamingConfig(type){
   const el = document.getElementById(`${type}-config`);
   const cfg = config[type];
-  const ext = type === "mp4" ? ".mp4" : ".wav";
+  const ext = type === "mp4" ? (files[0] ? videoExt(files[0]) : ".mp4") : ".wav";
 
   el.innerHTML = `
     <div class="segmented" data-type="${type}">
@@ -572,11 +577,11 @@ function renderNamingConfig(type){
 /* ---------- compute output names ---------- */
 function computeNames(type){
   const cfg = config[type];
-  const ext = type === "mp4" ? ".mp4" : ".wav";
-  if (cfg.mode === "keep") return files.map(f => sanitize(stripExt(f.name)) + ext);
-  if (cfg.mode === "individual") return files.map((f, i) => sanitize(cfg.individualNames[i] || stripExt(f.name)) + ext);
+  const extFor = type === "mp4" ? (f) => videoExt(f) : () => ".wav";
+  if (cfg.mode === "keep") return files.map(f => sanitize(stripExt(f.name)) + extFor(f));
+  if (cfg.mode === "individual") return files.map((f, i) => sanitize(cfg.individualNames[i] || stripExt(f.name)) + extFor(f));
   const base = sanitize(cfg.base || "file");
-  return files.map((f, i) => `${base}_${pad(cfg.start + i, cfg.digits)}${ext}`);
+  return files.map((f, i) => `${base}_${pad(cfg.start + i, cfg.digits)}${extFor(f)}`);
 }
 function validateConfig(){
   for (const type of ["mp4","wav"]){
