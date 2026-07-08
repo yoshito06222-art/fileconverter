@@ -207,35 +207,27 @@
   button.primary:hover{ background: #1d4fd1; }
   button.primary:disabled{ opacity: .45; cursor:not-allowed; }
 
-  .status-line{
-    display:flex; align-items:center; gap:10px;
-    font-size: 13px; color: var(--sub);
-    padding: 8px 2px;
-  }
-  .status-line .spinner{
-    width:13px; height:13px; border-radius:50%;
-    border: 2px solid var(--accent-soft);
-    border-top-color: var(--accent);
-    animation: spin 0.8s linear infinite;
-    flex-shrink:0;
-  }
-  @keyframes spin{ to{ transform: rotate(360deg); } }
-
-  .prog-row{
-    display:flex; align-items:center; gap:10px; padding: 6px 2px; font-size:13px; min-width:0;
-  }
-  .prog-row .pname{ flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-  .prog-row .pbar{
-    width:70px; height:5px; border-radius:3px; background: #ececee; overflow:hidden; flex-shrink:0;
-  }
-  .prog-row .pbar > div{ height:100%; width:0%; background: var(--accent); transition: width .2s ease; }
-  .prog-row .pstate{ width:48px; text-align:right; color:var(--sub); font-size:11.5px; flex-shrink:0; }
-  .prog-row.done .pstate{ color: var(--green); font-weight:600; }
-
   .error-box{
     font-size: 12.5px; color: var(--red); margin-top:8px; line-height:1.6;
     background: #fdeceb; border-radius:8px; padding:10px 12px;
   }
+
+  .prog-row{
+    display:flex; align-items:center; gap:10px; padding: 7px 2px; font-size:13px; min-width:0;
+    border-bottom: 1px solid var(--border);
+  }
+  .prog-row:last-child{ border-bottom:none; }
+  .prog-row .pname{ flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .prog-row .pstate{ flex-shrink:0; color:var(--sub); font-size:12px; display:flex; align-items:center; gap:6px; }
+  .prog-row .pstate .spinner{
+    width:11px; height:11px; border-radius:50%;
+    border: 2px solid var(--accent-soft);
+    border-top-color: var(--accent);
+    animation: spin 0.8s linear infinite;
+  }
+  @keyframes spin{ to{ transform: rotate(360deg); } }
+  .prog-row.done .pstate{ color: var(--green); font-weight:600; }
+  .prog-row.failed .pstate{ color: var(--red); font-weight:600; }
 
   .result-group{ margin-bottom: 14px; }
   .result-group h4{ font-size:11.5px; color:var(--sub); margin:0 0 8px; font-weight:600; text-transform:uppercase; letter-spacing:.03em; }
@@ -264,7 +256,7 @@
 <div class="app">
   <header>
     <h1>MP4 リネーム & WAV 変換</h1>
-    <p>MP4ファイルを選び、名前のルールを決めるだけで、リネーム済みのMP4と、音声を抽出したWAVをまとめて書き出します。</p>
+    <p>MP4ファイルを選び、名前のルールを決めるだけで、リネーム済みのMP4と、音声を抽出したWAVをまとめて書き出します。すべてブラウザ内で処理され、ファイルはどこにもアップロードされません。</p>
   </header>
 
   <div class="card" id="file-card">
@@ -314,18 +306,13 @@
   </div>
 </div>
 
-<script type="module">
-import { FFmpeg } from "https://unpkg.com/@ffmpeg/ffmpeg@0.12.10/dist/esm/index.js";
-import { fetchFile, toBlobURL } from "https://unpkg.com/@ffmpeg/util@0.12.1/dist/esm/index.js";
-
+<script>
 /* ---------- state ---------- */
 let files = [];
 const config = {
   mp4: { mode: "keep", individualNames: [], base: "", start: 1, digits: 2 },
   wav: { mode: "keep", individualNames: [], base: "", start: 1, digits: 2 },
 };
-let ffmpeg = null;
-let ffmpegLoaded = false;
 let results = { mp4: [], wav: [] };
 
 /* ---------- helpers ---------- */
@@ -341,6 +328,69 @@ function formatSize(bytes){
   if (bytes < 1024) return bytes + " B";
   if (bytes < 1024*1024) return (bytes/1024).toFixed(1) + " KB";
   return (bytes/1024/1024).toFixed(1) + " MB";
+}
+
+/* ---------- WAV encoding (native Web Audio API, no external libraries) ---------- */
+function interleaveChannels(audioBuffer){
+  const numChannels = audioBuffer.numberOfChannels;
+  const length = audioBuffer.length;
+  if (numChannels === 1) return audioBuffer.getChannelData(0);
+  const channelData = [];
+  for (let c = 0; c < numChannels; c++) channelData.push(audioBuffer.getChannelData(c));
+  const result = new Float32Array(length * numChannels);
+  let idx = 0;
+  for (let i = 0; i < length; i++){
+    for (let c = 0; c < numChannels; c++){
+      result[idx++] = channelData[c][i];
+    }
+  }
+  return result;
+}
+function writeString(view, offset, str){
+  for (let i = 0; i < str.length; i++) view.setUint8(offset + i, str.charCodeAt(i));
+}
+function floatTo16BitPCM(view, offset, input){
+  for (let i = 0; i < input.length; i++, offset += 2){
+    const s = Math.max(-1, Math.min(1, input[i]));
+    view.setInt16(offset, s < 0 ? s * 0x8000 : s * 0x7fff, true);
+  }
+}
+function audioBufferToWavBlob(audioBuffer){
+  const numChannels = audioBuffer.numberOfChannels;
+  const sampleRate = audioBuffer.sampleRate;
+  const samples = interleaveChannels(audioBuffer);
+  const bytesPerSample = 2;
+  const blockAlign = numChannels * bytesPerSample;
+  const buffer = new ArrayBuffer(44 + samples.length * bytesPerSample);
+  const view = new DataView(buffer);
+
+  writeString(view, 0, "RIFF");
+  view.setUint32(4, 36 + samples.length * bytesPerSample, true);
+  writeString(view, 8, "WAVE");
+  writeString(view, 12, "fmt ");
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
+  view.setUint16(22, numChannels, true);
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate * blockAlign, true);
+  view.setUint16(32, blockAlign, true);
+  view.setUint16(34, 16, true);
+  writeString(view, 36, "data");
+  view.setUint32(40, samples.length * bytesPerSample, true);
+  floatTo16BitPCM(view, 44, samples);
+
+  return new Blob([view], { type: "audio/wav" });
+}
+async function extractWav(file){
+  const arrayBuffer = await file.arrayBuffer();
+  const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+  const audioCtx = new AudioContextClass();
+  try {
+    const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
+    return audioBufferToWavBlob(audioBuffer);
+  } finally {
+    audioCtx.close();
+  }
 }
 
 /* ---------- file selection ---------- */
@@ -382,7 +432,6 @@ function setFiles(list){
   config.wav.individualNames = files.map(f => stripExt(f.name));
   afterFilesChanged();
 }
-
 function addFiles(list){
   files = files.concat(list);
   list.forEach(f => {
@@ -391,7 +440,6 @@ function addFiles(list){
   });
   afterFilesChanged();
 }
-
 function afterFilesChanged(){
   renderFileList();
   renderNamingConfig("mp4");
@@ -403,7 +451,6 @@ function afterFilesChanged(){
   processCard.classList.toggle("hidden", !hasFiles);
   document.getElementById("results-card").classList.add("hidden");
 }
-
 function renderFileList(){
   fileListEl.innerHTML = "";
   files.forEach((f, i) => {
@@ -531,7 +578,6 @@ function computeNames(type){
   const base = sanitize(cfg.base || "file");
   return files.map((f, i) => `${base}_${pad(cfg.start + i, cfg.digits)}${ext}`);
 }
-
 function validateConfig(){
   for (const type of ["mp4","wav"]){
     const cfg = config[type];
@@ -565,31 +611,6 @@ processBtn.addEventListener("click", async () => {
   resultsCard.classList.add("hidden");
   results = { mp4: [], wav: [] };
 
-  const statusLine = document.createElement("div");
-  statusLine.className = "status-line";
-  const statusText = document.createElement("span");
-  statusText.textContent = "変換エンジンを読み込み中…（初回のみ数十MBのダウンロードが発生します）";
-  const spinner = document.createElement("div");
-  spinner.className = "spinner";
-  statusLine.appendChild(spinner);
-  statusLine.appendChild(statusText);
-  progressArea.appendChild(statusLine);
-
-  try {
-    await ensureFfmpeg((msg) => { statusText.textContent = msg; });
-  } catch (e){
-    console.error("ffmpeg load failed:", e);
-    statusLine.querySelector(".spinner")?.remove();
-    statusText.innerHTML =
-      "変換エンジンの読み込みに失敗、または時間がかかりすぎています。<br>" +
-      "このファイルを <b>file://</b> で直接開いていませんか？その場合、ブラウザがWeb Workerの起動をブロックし、変換が進まないことがあります。<br>" +
-      "GitHub Pagesなど <b>https://</b> 経由で開くか、ローカルサーバー（例: <code>npx serve</code>）を使って開いてみてください。";
-    statusText.style.color = "var(--red)";
-    processBtn.disabled = false;
-    return;
-  }
-  statusLine.remove();
-
   const mp4Names = computeNames("mp4");
   const wavNames = computeNames("wav");
 
@@ -598,7 +619,6 @@ processBtn.addEventListener("click", async () => {
     row.className = "prog-row";
     row.innerHTML = `
       <div class="pname">${wavNames[i]}</div>
-      <div class="pbar"><div></div></div>
       <div class="pstate">待機中</div>
     `;
     progressArea.appendChild(row);
@@ -608,66 +628,25 @@ processBtn.addEventListener("click", async () => {
   for (let i = 0; i < files.length; i++){
     const file = files[i];
     const row = rows[i];
-    const bar = row.querySelector(".pbar > div");
     const state = row.querySelector(".pstate");
-    state.textContent = "変換中";
+    state.innerHTML = `<div class="spinner"></div>変換中`;
 
-    const onProgress = ({ progress }) => {
-      const pct = Math.min(100, Math.max(0, Math.round(progress * 100)));
-      bar.style.width = pct + "%";
-    };
-    ffmpeg.on("progress", onProgress);
-
-    const inputName = `in_${i}.mp4`;
-    const outputName = `out_${i}.wav`;
     try {
-      await ffmpeg.writeFile(inputName, await fetchFile(file));
-      await ffmpeg.exec(["-i", inputName, "-vn", "-acodec", "pcm_s16le", outputName]);
-      const data = await ffmpeg.readFile(outputName);
-      const wavBlob = new Blob([data.buffer], { type: "audio/wav" });
+      const wavBlob = await extractWav(file);
       results.wav.push({ name: wavNames[i], blob: wavBlob });
       results.mp4.push({ name: mp4Names[i], blob: file });
-      await ffmpeg.deleteFile(inputName);
-      await ffmpeg.deleteFile(outputName);
+      state.textContent = "完了";
+      row.classList.add("done");
     } catch (e){
       console.error(`変換失敗 (${file.name}):`, e);
       state.textContent = "失敗";
-      state.style.color = "var(--red)";
-      ffmpeg.off("progress", onProgress);
-      continue;
+      row.classList.add("failed");
     }
-    ffmpeg.off("progress", onProgress);
-    bar.style.width = "100%";
-    state.textContent = "完了";
-    row.classList.add("done");
   }
 
   processBtn.disabled = false;
   renderResults();
 });
-
-async function ensureFfmpeg(onStatus){
-  if (ffmpegLoaded) return;
-  ffmpeg = new FFmpeg();
-  ffmpeg.on("log", ({ message }) => console.log("[ffmpeg]", message));
-
-  const baseURL = "https://unpkg.com/@ffmpeg/core@0.12.6/dist/esm";
-
-  const loadPromise = (async () => {
-    onStatus("エンジンのコアファイルをダウンロード中…");
-    const coreURL = await toBlobURL(`${baseURL}/ffmpeg-core.js`, "text/javascript");
-    const wasmURL = await toBlobURL(`${baseURL}/ffmpeg-core.wasm`, "application/wasm");
-    onStatus("エンジンを初期化中…");
-    await ffmpeg.load({ coreURL, wasmURL });
-  })();
-
-  const timeoutPromise = new Promise((_, reject) => {
-    setTimeout(() => reject(new Error("ffmpeg load timeout")), 45000);
-  });
-
-  await Promise.race([loadPromise, timeoutPromise]);
-  ffmpegLoaded = true;
-}
 
 /* ---------- results / download ---------- */
 function renderResults(){
@@ -675,14 +654,11 @@ function renderResults(){
   const wavEl = document.getElementById("result-wav");
   mp4El.innerHTML = "";
   wavEl.innerHTML = "";
-
   results.mp4.forEach(r => mp4El.appendChild(makeResultRow(r)));
   results.wav.forEach(r => wavEl.appendChild(makeResultRow(r)));
-
   resultsCard.classList.remove("hidden");
   resultsCard.scrollIntoView({ behavior: "smooth", block: "start" });
 }
-
 function makeResultRow(r){
   const row = document.createElement("div");
   row.className = "result-row";
@@ -696,7 +672,6 @@ function makeResultRow(r){
   row.appendChild(a);
   return row;
 }
-
 function ensureJSZip(){
   if (window.JSZip) return Promise.resolve();
   return new Promise((resolve, reject) => {
@@ -707,7 +682,6 @@ function ensureJSZip(){
     document.head.appendChild(script);
   });
 }
-
 document.getElementById("zip-btn").addEventListener("click", async () => {
   const zipBtn = document.getElementById("zip-btn");
   zipBtn.disabled = true;
