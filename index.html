@@ -257,7 +257,7 @@
 <div class="app">
   <header>
     <h1>動画 リネーム & WAV 変換</h1>
-    <p>MP4 / MOVファイルを選び、名前のルールを決めるだけで、リネーム済みの動画ファイルと、音声を抽出したWAVをまとめて書き出します。すべてブラウザ内で処理され、ファイルはどこにもアップロードされません。</p>
+    <p>MP4 / MOVファイルを選び、名前のルールを決めるだけで、リネーム済みの動画ファイルと、音声を抽出したWAVをまとめて書き出します。WAVは動画内の元のサンプルレートを検出し、リサンプリングせずに書き出します。すべてブラウザ内で処理され、ファイルはどこにもアップロードされません。</p>
   </header>
 
   <div class="card" id="file-card">
@@ -335,6 +335,76 @@ function formatSize(bytes){
   return (bytes/1024/1024).toFixed(1) + " MB";
 }
 
+/* ---------- detect original audio sample rate from MP4/MOV container ---------- */
+function readUint32BE(view, offset){ return view.getUint32(offset, false); }
+function readFourCC(view, offset){
+  return String.fromCharCode(
+    view.getUint8(offset), view.getUint8(offset+1), view.getUint8(offset+2), view.getUint8(offset+3)
+  );
+}
+function findBoxes(view, start, end){
+  const boxes = [];
+  let offset = start;
+  while (offset + 8 <= end){
+    let size = readUint32BE(view, offset);
+    const type = readFourCC(view, offset + 4);
+    let headerSize = 8;
+    if (size === 1){
+      if (offset + 16 > end) break;
+      const high = readUint32BE(view, offset + 8);
+      const low = readUint32BE(view, offset + 12);
+      size = high * 4294967296 + low;
+      headerSize = 16;
+    } else if (size === 0){
+      size = end - offset;
+    }
+    if (size < headerSize || offset + size > end) break;
+    boxes.push({ type, start: offset, end: offset + size, contentStart: offset + headerSize });
+    offset += size;
+  }
+  return boxes;
+}
+function findBox(boxes, type){ return boxes.find(b => b.type === type); }
+
+const AUDIO_SAMPLE_ENTRY_TYPES = ["mp4a","alac","ac-3","ec-3","twos","sowt","lpcm","in24","in32","fl32","fl64","samr","sawb","fLaC","Opus"];
+
+function detectAudioSampleRate(arrayBuffer){
+  try {
+    const view = new DataView(arrayBuffer);
+    const top = findBoxes(view, 0, arrayBuffer.byteLength);
+    const moov = findBox(top, "moov");
+    if (!moov) return null;
+    const traks = findBoxes(view, moov.contentStart, moov.end).filter(b => b.type === "trak");
+    for (const trak of traks){
+      const trakChildren = findBoxes(view, trak.contentStart, trak.end);
+      const mdia = findBox(trakChildren, "mdia");
+      if (!mdia) continue;
+      const mdiaChildren = findBoxes(view, mdia.contentStart, mdia.end);
+      const hdlr = findBox(mdiaChildren, "hdlr");
+      if (!hdlr) continue;
+      const handlerType = readFourCC(view, hdlr.contentStart + 8); // version(1)+flags(3)+pre_defined(4)
+      if (handlerType !== "soun") continue;
+      const minf = findBox(mdiaChildren, "minf");
+      if (!minf) continue;
+      const stbl = findBox(findBoxes(view, minf.contentStart, minf.end), "stbl");
+      if (!stbl) continue;
+      const stsd = findBox(findBoxes(view, stbl.contentStart, stbl.end), "stsd");
+      if (!stsd) continue;
+      const entries = findBoxes(view, stsd.contentStart + 8, stsd.end); // skip version+flags+entry_count
+      const entry = entries.find(e => AUDIO_SAMPLE_ENTRY_TYPES.includes(e.type));
+      if (!entry) continue;
+      const rateOffset = entry.contentStart + 24; // AudioSampleEntry.samplerate (32-bit, 16.16 fixed point)
+      if (rateOffset + 4 > entry.end) continue;
+      const raw = readUint32BE(view, rateOffset);
+      const sampleRate = raw >>> 16;
+      if (sampleRate > 0) return sampleRate;
+    }
+  } catch (e){
+    console.warn("sample rate detection failed:", e);
+  }
+  return null;
+}
+
 /* ---------- WAV encoding (native Web Audio API, no external libraries) ---------- */
 function interleaveChannels(audioBuffer){
   const numChannels = audioBuffer.numberOfChannels;
@@ -354,17 +424,11 @@ function interleaveChannels(audioBuffer){
 function writeString(view, offset, str){
   for (let i = 0; i < str.length; i++) view.setUint8(offset + i, str.charCodeAt(i));
 }
-function floatTo16BitPCM(view, offset, input){
-  for (let i = 0; i < input.length; i++, offset += 2){
-    const s = Math.max(-1, Math.min(1, input[i]));
-    view.setInt16(offset, s < 0 ? s * 0x8000 : s * 0x7fff, true);
-  }
-}
 function audioBufferToWavBlob(audioBuffer){
   const numChannels = audioBuffer.numberOfChannels;
   const sampleRate = audioBuffer.sampleRate;
   const samples = interleaveChannels(audioBuffer);
-  const bytesPerSample = 2;
+  const bytesPerSample = 4; // 32-bit float: no quantization beyond what decodeAudioData already produced
   const blockAlign = numChannels * bytesPerSample;
   const buffer = new ArrayBuffer(44 + samples.length * bytesPerSample);
   const view = new DataView(buffer);
@@ -374,25 +438,44 @@ function audioBufferToWavBlob(audioBuffer){
   writeString(view, 8, "WAVE");
   writeString(view, 12, "fmt ");
   view.setUint32(16, 16, true);
-  view.setUint16(20, 1, true);
+  view.setUint16(20, 3, true); // 3 = IEEE float
   view.setUint16(22, numChannels, true);
   view.setUint32(24, sampleRate, true);
   view.setUint32(28, sampleRate * blockAlign, true);
   view.setUint16(32, blockAlign, true);
-  view.setUint16(34, 16, true);
+  view.setUint16(34, 32, true);
   writeString(view, 36, "data");
   view.setUint32(40, samples.length * bytesPerSample, true);
-  floatTo16BitPCM(view, 44, samples);
+
+  let offset = 44;
+  for (let i = 0; i < samples.length; i++, offset += 4){
+    view.setFloat32(offset, samples[i], true);
+  }
 
   return new Blob([view], { type: "audio/wav" });
 }
 async function extractWav(file){
   const arrayBuffer = await file.arrayBuffer();
+  const detectedRate = detectAudioSampleRate(arrayBuffer);
+  const OfflineCtx = window.OfflineAudioContext || window.webkitOfflineAudioContext;
+
+  if (detectedRate && OfflineCtx){
+    try {
+      // length=1 is enough: we only use this context to control decodeAudioData's target
+      // sample rate, we never render/play through it.
+      const decodeCtx = new OfflineCtx(1, 1, detectedRate);
+      const audioBuffer = await decodeCtx.decodeAudioData(arrayBuffer);
+      return { blob: audioBufferToWavBlob(audioBuffer), rate: audioBuffer.sampleRate, matchedOriginal: true };
+    } catch (e){
+      console.warn("固定サンプルレートでのデコードに失敗、既定のレートにフォールバックします:", e);
+    }
+  }
+
   const AudioContextClass = window.AudioContext || window.webkitAudioContext;
   const audioCtx = new AudioContextClass();
   try {
     const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
-    return audioBufferToWavBlob(audioBuffer);
+    return { blob: audioBufferToWavBlob(audioBuffer), rate: audioBuffer.sampleRate, matchedOriginal: false };
   } finally {
     audioCtx.close();
   }
@@ -637,10 +720,12 @@ processBtn.addEventListener("click", async () => {
     state.innerHTML = `<div class="spinner"></div>変換中`;
 
     try {
-      const wavBlob = await extractWav(file);
+      const { blob: wavBlob, rate, matchedOriginal } = await extractWav(file);
       results.wav.push({ name: wavNames[i], blob: wavBlob });
       results.mp4.push({ name: mp4Names[i], blob: file });
-      state.textContent = "完了";
+      state.innerHTML = matchedOriginal
+        ? `完了 <span style="color:var(--sub);font-weight:400;">(${rate} Hz・元のレート)</span>`
+        : `完了 <span style="color:var(--sub);font-weight:400;">(${rate} Hz・検出不可のため既定値)</span>`;
       row.classList.add("done");
     } catch (e){
       console.error(`変換失敗 (${file.name}):`, e);
